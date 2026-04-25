@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Callable
 
 from aiohttp import web, WSMsgType
 
@@ -41,7 +41,6 @@ class VoiceSession:
         self.audio_buffer = bytearray()
         self.is_speaking = False
         self.is_agent_speaking = False
-        self.agent_response_queue: asyncio.Queue = asyncio.Queue()
 
     async def send_event(self, event_type: str, data: dict = None):
         payload = {"type": event_type}
@@ -74,7 +73,7 @@ class VoiceServer:
         logger.info(f"Loading Kokoros TTS with voice: {kokoros_voice}")
         self.tts = KokorosTTS(voice=kokoros_voice, sample_rate=sample_rate)
 
-        logger.info("Loading Silero VAD")
+        logger.info("Loading Silero VAD config")
         self.vad_config = {
             "threshold": vad_threshold,
             "silence_duration": vad_silence_duration,
@@ -84,11 +83,6 @@ class VoiceServer:
         self.sessions: Dict[int, VoiceSession] = {}
         self.app = web.Application()
         self.app.router.add_get("/ws", self.handle_websocket)
-        self.app.router.add_get("/", self.handle_index)
-        self.app.router.add_static("/static", Path(__file__).parent.parent / "client")
-
-    async def handle_index(self, request: web.Request):
-        return web.FileResponse(Path(__file__).parent.parent / "client" / "index.html")
 
     async def handle_websocket(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -127,7 +121,6 @@ class VoiceServer:
         if msg_type == "barge_in":
             logger.info("Barge-in received, stopping agent audio")
             session.is_agent_speaking = False
-            await session.agent_response_queue.put(None)
 
         elif msg_type == "text_input":
             text = msg.get("text", "").strip()

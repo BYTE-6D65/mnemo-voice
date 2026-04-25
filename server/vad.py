@@ -1,71 +1,131 @@
 """
-Silero VAD wrapper for voice activity detection.
+Voice activity detection.
 
-Uses the Silero VAD model to detect speech boundaries in an audio stream.
-Lightweight, runs on CPU, no external deps beyond torch.
+Primary path: Silero VAD if available.
+Fallback path: simple energy-based VAD so the WebSocket never dies because
+PyTorch/Silero/torchaudio dependency soup got weird.
 """
 
 import logging
-import torch
+from typing import Optional
+
 import numpy as np
 
 logger = logging.getLogger("mnemo-voice.vad")
 
 
+class EnergyVAD:
+    """Tiny RMS-energy VAD fallback. Good enough for prototype push-to-talk."""
+
+    def __init__(
+        self,
+        threshold: float = 0.012,
+        silence_duration: float = 0.8,
+        sample_rate: int = 16000,
+        chunk_ms: int = 256,
+    ):
+        # Silero-style thresholds are ~0.5 probability. If caller passes that,
+        # map it into a reasonable RMS range instead of requiring new config.
+        self.threshold = threshold if threshold < 0.1 else 0.012
+        self.silence_duration = silence_duration
+        self.sample_rate = sample_rate
+        self.chunk_ms = chunk_ms
+        self._silence_chunks = 0
+        self._silence_threshold_chunks = max(1, int(silence_duration * 1000 / chunk_ms))
+
+    @property
+    def silence_exceeded(self) -> bool:
+        return self._silence_chunks >= self._silence_threshold_chunks
+
+    def reset(self):
+        self._silence_chunks = 0
+
+    def process_chunk(self, pcm_bytes: bytes) -> bool:
+        if not pcm_bytes:
+            self._silence_chunks += 1
+            return False
+
+        audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        if audio.size == 0:
+            self._silence_chunks += 1
+            return False
+
+        rms = float(np.sqrt(np.mean(audio * audio)))
+        is_speech = rms > self.threshold
+
+        if is_speech:
+            self._silence_chunks = 0
+        else:
+            self._silence_chunks += 1
+
+        return is_speech
+
+
 class SileroVAD:
-    """Voice Activity Detection using Silero VAD model."""
+    """
+    Silero VAD wrapper with safe fallback.
+
+    Keeps the old class name so server/main.py does not care which backend is
+    actually active.
+    """
 
     def __init__(
         self,
         threshold: float = 0.5,
         silence_duration: float = 0.8,
         sample_rate: int = 16000,
-        chunk_ms: int = 480,
+        chunk_ms: int = 256,
     ):
         self.threshold = threshold
         self.silence_duration = silence_duration
         self.sample_rate = sample_rate
         self.chunk_ms = chunk_ms
-        self.chunk_samples = int(sample_rate * chunk_ms / 1000)
-
-        # Load Silero model
-        self.model, utils = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-            trust_repo=True,
-        )
-        self._get_speech_ts = utils[0]
-
-        # State tracking
         self._silence_chunks = 0
-        self._silence_threshold_chunks = int(silence_duration * 1000 / chunk_ms)
+        self._silence_threshold_chunks = max(1, int(silence_duration * 1000 / chunk_ms))
+        self._torch = None
+        self.model = None
+        self.fallback: Optional[EnergyVAD] = None
+
+        try:
+            import torch
+
+            self._torch = torch
+            self.model, _utils = torch.hub.load(
+                repo_or_dir="snakers4/silero-vad",
+                model="silero_vad",
+                trust_repo=True,
+            )
+            logger.info("Using Silero VAD")
+        except Exception as exc:
+            logger.warning("Silero VAD unavailable (%s); using EnergyVAD fallback", exc)
+            self.fallback = EnergyVAD(
+                threshold=threshold,
+                silence_duration=silence_duration,
+                sample_rate=sample_rate,
+                chunk_ms=chunk_ms,
+            )
 
     @property
     def silence_exceeded(self) -> bool:
-        """Check if we've had enough silence to consider speech ended."""
+        if self.fallback is not None:
+            return self.fallback.silence_exceeded
         return self._silence_chunks >= self._silence_threshold_chunks
 
     def reset(self):
-        """Reset VAD state."""
         self._silence_chunks = 0
-        self.model.reset_states()
+        if self.fallback is not None:
+            self.fallback.reset()
+        elif self.model is not None and hasattr(self.model, "reset_states"):
+            self.model.reset_states()
 
     def process_chunk(self, pcm_bytes: bytes) -> bool:
-        """
-        Process a PCM audio chunk and return True if speech is detected.
+        if self.fallback is not None:
+            return self.fallback.process_chunk(pcm_bytes)
 
-        Args:
-            pcm_bytes: 16-bit PCM audio data at 16kHz
-
-        Returns:
-            True if speech detected in this chunk
-        """
-        # Convert bytes to float tensor
         audio_int16 = np.frombuffer(pcm_bytes, dtype=np.int16)
         audio_float = audio_int16.astype(np.float32) / 32768.0
-        audio_tensor = torch.from_numpy(audio_float)
+        audio_tensor = self._torch.from_numpy(audio_float)
 
-        # Get speech probability
         speech_prob = self.model(audio_tensor, self.sample_rate).item()
         is_speech = speech_prob > self.threshold
 
