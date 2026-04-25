@@ -1,0 +1,4 @@
+faster-whisper
+aiohttp
+numpy
+torch
