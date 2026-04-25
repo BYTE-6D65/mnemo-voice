@@ -30,8 +30,6 @@ function useVoiceClient(url: string) {
   const [agentState, setAgentState] = useState<AgentState>('idle')
   const [chatLog, setChatLog] = useState<ChatEntry[]>([])
   const [sampleRate, setSampleRate] = useState(16000)
-  const isRecording = isRecordingRef.current
-
   const addLog = useCallback((role: ChatEntry['role'], text: string) => {
     setChatLog(prev => [...prev, { role, text, ts: Date.now() }])
   }, [])

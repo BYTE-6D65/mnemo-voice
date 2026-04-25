@@ -1,12 +1,15 @@
 """
 Voice activity detection.
 
-Primary path: Silero VAD if available.
-Fallback path: simple energy-based VAD so the WebSocket never dies because
-PyTorch/Silero/torchaudio dependency soup got weird.
+Default path: simple energy-based VAD. It is dependency-light and perfectly fine
+for push-to-talk prototype work.
+
+Optional path: set MNEMO_USE_SILERO=1 to try Silero VAD. If Silero or its
+transitive deps are missing, it falls back to EnergyVAD without killing the WS.
 """
 
 import logging
+import os
 from typing import Optional
 
 import numpy as np
@@ -63,9 +66,9 @@ class EnergyVAD:
 
 class SileroVAD:
     """
-    Silero VAD wrapper with safe fallback.
+    VAD facade.
 
-    Keeps the old class name so server/main.py does not care which backend is
+    Keeps this class name so server/main.py does not care which backend is
     actually active.
     """
 
@@ -86,7 +89,20 @@ class SileroVAD:
         self.model = None
         self.fallback: Optional[EnergyVAD] = None
 
+        if os.environ.get("MNEMO_USE_SILERO") != "1":
+            self.fallback = EnergyVAD(
+                threshold=threshold,
+                silence_duration=silence_duration,
+                sample_rate=sample_rate,
+                chunk_ms=chunk_ms,
+            )
+            logger.info("Using EnergyVAD")
+            return
+
         try:
+            # Explicit import catches the current Silero torch.hub transitive dep
+            # before it aborts websocket setup deep in hubconf.py.
+            import torchaudio  # noqa: F401
             import torch
 
             self._torch = torch
