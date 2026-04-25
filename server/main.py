@@ -13,17 +13,15 @@ Runs an aiohttp WebSocket server that:
 import asyncio
 import json
 import logging
-import signal
-import sys
-import os
 from pathlib import Path
+from typing import Optional, Dict, Any, Callable
 
 from aiohttp import web, WSMsgType
 
 from vad import SileroVAD
 from stt import WhisperSTT
 from tts import KokorosTTS
-from audio import resample_pcm, pcm_to_wav_bytes
+from audio import pcm_to_wav_bytes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,17 +41,15 @@ class VoiceSession:
         self.audio_buffer = bytearray()
         self.is_speaking = False
         self.is_agent_speaking = False
-        self.agent_response_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        self.agent_response_queue: asyncio.Queue = asyncio.Queue()
 
     async def send_event(self, event_type: str, data: dict = None):
-        """Send a JSON event to the client."""
         payload = {"type": event_type}
         if data:
             payload["data"] = data
         await self.ws.send_json(payload)
 
     async def send_audio(self, pcm_bytes: bytes):
-        """Send raw PCM audio to the client."""
         await self.ws.send_bytes(pcm_bytes)
 
 
@@ -66,13 +62,12 @@ class VoiceServer:
                  vad_threshold: float = 0.5,
                  vad_silence_duration: float = 0.8,
                  sample_rate: int = 16000,
-                 agent_handler=None):
+                 agent_handler: Optional[Callable] = None):
         self.host = host
         self.port = port
         self.sample_rate = sample_rate
-        self.agent_handler = agent_handler  # callback(text) -> response_text
+        self.agent_handler = agent_handler
 
-        # Initialize pipeline components
         logger.info(f"Loading Whisper model: {whisper_model}")
         self.stt = WhisperSTT(model_name=whisper_model)
 
@@ -80,27 +75,28 @@ class VoiceServer:
         self.tts = KokorosTTS(voice=kokoros_voice, sample_rate=sample_rate)
 
         logger.info("Loading Silero VAD")
-        self.vad = SileroVAD(
-            threshold=vad_threshold,
-            silence_duration=vad_silence_duration,
-            sample_rate=sample_rate,
-        )
+        self.vad_config = {
+            "threshold": vad_threshold,
+            "silence_duration": vad_silence_duration,
+            "sample_rate": sample_rate,
+        }
 
-        self.sessions: dict[str, VoiceSession] = {}
+        self.sessions: Dict[int, VoiceSession] = {}
         self.app = web.Application()
         self.app.router.add_get("/ws", self.handle_websocket)
         self.app.router.add_get("/", self.handle_index)
-        self.app.router.add_static("/static", Path(__file__).parent / "client")
+        self.app.router.add_static("/static", Path(__file__).parent.parent / "client")
 
-    async def handle_index(self, request: web.Request) -> web.FileResponse:
-        return web.FileResponse(Path(__file__).parent / "client" / "index.html")
+    async def handle_index(self, request: web.Request):
+        return web.FileResponse(Path(__file__).parent.parent / "client" / "index.html")
 
     async def handle_websocket(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
         session_id = id(ws)
-        session = VoiceSession(ws=ws, vad=self.vad, stt=self.stt, tts=self.tts)
+        vad = SileroVAD(**self.vad_config)
+        session = VoiceSession(ws=ws, vad=vad, stt=self.stt, tts=self.tts)
         self.sessions[session_id] = session
 
         logger.info(f"Client connected: {session_id}")
@@ -121,7 +117,6 @@ class VoiceServer:
         return ws
 
     async def _handle_text_message(self, session: VoiceSession, data: str):
-        """Handle control messages from the client."""
         try:
             msg = json.loads(data)
         except json.JSONDecodeError:
@@ -130,24 +125,19 @@ class VoiceServer:
         msg_type = msg.get("type")
 
         if msg_type == "barge_in":
-            # Client wants to interrupt agent speech
             logger.info("Barge-in received, stopping agent audio")
             session.is_agent_speaking = False
-            await session.agent_response_queue.put(None)  # sentinel to stop TTS
+            await session.agent_response_queue.put(None)
 
         elif msg_type == "text_input":
-            # Client sent text instead of voice
             text = msg.get("text", "").strip()
             if text:
                 await self._process_agent_response(session, text)
 
     async def _handle_audio_chunk(self, session: VoiceSession, pcm_bytes: bytes):
-        """Process incoming audio chunk through VAD pipeline."""
-        # Feed to VAD
         is_speech = session.vad.process_chunk(pcm_bytes)
 
         if is_speech and not session.is_speaking:
-            # Speech started
             session.is_speaking = True
             session.audio_buffer = bytearray()
             await session.send_event("speech_start")
@@ -156,7 +146,6 @@ class VoiceServer:
             session.audio_buffer.extend(pcm_bytes)
 
         if not is_speech and session.is_speaking and session.vad.silence_exceeded:
-            # Speech ended — transcribe
             session.is_speaking = False
             await session.send_event("speech_end")
 
@@ -164,10 +153,8 @@ class VoiceServer:
                 await self._transcribe_and_respond(session)
 
     async def _transcribe_and_respond(self, session: VoiceSession):
-        """Transcribe buffered audio and send to agent."""
         await session.send_event("transcribing")
 
-        # Convert PCM buffer to wav for Whisper
         wav_bytes = pcm_to_wav_bytes(bytes(session.audio_buffer), self.sample_rate)
         text = await asyncio.to_thread(self.stt.transcribe, wav_bytes)
 
@@ -178,18 +165,14 @@ class VoiceServer:
         logger.info(f"Transcribed: {text}")
         await session.send_event("transcription", {"text": text})
 
-        # Send to agent
         await self._process_agent_response(session, text)
 
     async def _process_agent_response(self, session: VoiceSession, text: str):
-        """Send text to agent and stream TTS response back."""
         await session.send_event("agent_thinking")
 
-        # Get agent response
         if self.agent_handler:
             response_text = await asyncio.to_thread(self.agent_handler, text)
         else:
-            # Standalone mode — echo back for testing
             response_text = f"I heard you say: {text}"
 
         if not response_text:
@@ -198,26 +181,22 @@ class VoiceServer:
         logger.info(f"Agent response: {response_text[:100]}...")
         await session.send_event("agent_response", {"text": response_text})
 
-        # Synthesize and stream audio
         session.is_agent_speaking = True
         await session.send_event("audio_start")
 
         try:
-            # Generate full audio with Kokoros
             audio = await asyncio.to_thread(self.tts.synthesize, response_text)
 
             if audio is None:
                 await session.send_event("audio_error", {"error": "TTS synthesis failed"})
                 return
 
-            # Stream audio in chunks
-            chunk_size = self.sample_rate * 2 * 0.12  # 120ms chunks (16-bit mono)
+            chunk_size = int(self.sample_rate * 2 * 0.12)  # 120ms chunks
             offset = 0
             while offset < len(audio) and session.is_agent_speaking:
-                chunk = audio[offset:offset + int(chunk_size)]
+                chunk = audio[offset:offset + chunk_size]
                 await session.send_audio(chunk)
-                offset += int(chunk_size)
-                # Small delay to avoid overwhelming the client
+                offset += chunk_size
                 await asyncio.sleep(0.02)
 
         finally:
@@ -225,11 +204,9 @@ class VoiceServer:
             await session.send_event("audio_end")
 
     def set_agent_handler(self, handler):
-        """Set the agent callback. handler(text: str) -> str"""
         self.agent_handler = handler
 
     def run(self):
-        """Run the server."""
         logger.info(f"Starting voice server on {self.host}:{self.port}")
         web.run_app(self.app, host=self.host, port=self.port)
 
