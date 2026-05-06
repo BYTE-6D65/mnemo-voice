@@ -5,31 +5,37 @@
  * then renders the VRM model driven by the avatar driver.
  */
 
-import { Suspense, useState } from 'react'
+import { Suspense, useState, useCallback } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import { VRMRenderer, AvatarPlaceholder } from './VRMRenderer'
-import type { AvatarFrame } from './types'
+import type { AvatarFrame, AvatarOverride } from './types'
 
 interface AvatarSceneProps {
   /** URL to .vrm model file */
   modelUrl: string | null
   /** Current avatar frame from useAvatarDriver */
   frame: AvatarFrame
+  /** Override from parsed avatar tags */
+  override?: AvatarOverride
   /** CSS class or inline style for the container */
   className?: string
   style?: React.CSSProperties
 }
 
-export function AvatarScene({ modelUrl, frame, className, style }: AvatarSceneProps) {
+export function AvatarScene({ modelUrl, frame, override, className, style }: AvatarSceneProps) {
   const [loadError, setLoadError] = useState<string | null>(null)
+
+  // Stabilize callbacks so VRMRenderer effect only re-runs on modelUrl change
+  const handleLoaded = useCallback(() => { setLoadError(null) }, [])
+  const handleError = useCallback((err: Error) => { setLoadError(err.message) }, [])
 
   return (
     <div className={className} style={{ width: '100%', height: '100%', ...style }}>
       <Canvas
         camera={{ position: [0, 1.3, 2.5], fov: 35 }}
-        style={{ background: 'transparent' }}
-        gl={{ alpha: true, antialias: true }}
+        style={{ background: '#111' }}
+        gl={{ alpha: false, antialias: true }}
       >
         {/* Lighting */}
         <ambientLight intensity={0.6} />
@@ -51,12 +57,9 @@ export function AvatarScene({ modelUrl, frame, className, style }: AvatarScenePr
             <VRMRenderer
               modelUrl={modelUrl}
               frame={frame}
-              onLoaded={() => {
-                setLoadError(null)
-              }}
-              onError={(err) => {
-                setLoadError(err.message)
-              }}
+              override={override}
+              onLoaded={handleLoaded}
+              onError={handleError}
             />
           )}
           {!modelUrl && <AvatarPlaceholder />}

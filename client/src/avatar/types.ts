@@ -15,6 +15,14 @@ export type ExpressionName =
   | 'happy' | 'angry' | 'sad' | 'surprised'
   | 'neutral' | 'relaxed' | 'lookUp' | 'lookDown'
 
+/** Expression/look override parsed from agent text tags */
+export interface AvatarOverride {
+  expression?: Partial<Record<ExpressionName, number>>
+  lookAt?: { x: number; y: number; z: number }
+  /** Head roll in radians (positive = tilt right, negative = tilt left) */
+  headTilt?: number
+}
+
 /** A single frame of avatar state, produced every render tick */
 export interface AvatarFrame {
   /** Current viseme weight (0–1). Only one should be dominant. */

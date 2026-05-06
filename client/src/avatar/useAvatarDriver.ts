@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import type { AvatarFrame, ExpressionName, VisemeName } from './types'
+import type { AvatarFrame, AvatarOverride, ExpressionName, VisemeName } from './types'
 
 export type AgentState = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking'
 
@@ -30,6 +30,7 @@ export function useAvatarDriver(
   agentState: AgentState,
   analyser: AnalyserNode | null,
   opts?: UseAvatarDriverOptions,
+  override?: AvatarOverride,
 ) {
   const { amplitudeWindow, blendSpeed } = { ...DEFAULT_OPTS, ...opts }
   const frameRef = useRef<AvatarFrame>(emptyFrame())
@@ -132,10 +133,19 @@ export function useAvatarDriver(
         visemeMap.neutral = 1 - blendedWeight
       }
 
+      // Build expression: start with state-based, layer override on top
+      const baseExpr = getExpression(agentState)
+      const expression = { ...baseExpr }
+      if (override?.expression) {
+        for (const [k, v] of Object.entries(override.expression)) {
+          if (v !== undefined) (expression as Record<string, number>)[k] = v
+        }
+      }
+
       const newFrame: AvatarFrame = {
         viseme: visemeMap,
-        expression: getExpression(agentState),
-        lookAt: { x: 0, y: 0, z: -1 },
+        expression,
+        lookAt: override?.lookAt ?? { x: 0, y: 0, z: -1 },
         isSpeaking,
       }
 
@@ -146,7 +156,7 @@ export function useAvatarDriver(
 
     rafRef.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafRef.current)
-  }, [agentState, analyser, amplitudeWindow, blendSpeed, getAmplitude, getExpression])
+  }, [agentState, analyser, amplitudeWindow, blendSpeed, getAmplitude, getExpression, override])
 
   return { frame }
 }

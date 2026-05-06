@@ -1,4 +1,10 @@
 faster-whisper
 aiohttp
 numpy
-torch
+mlx-audio
+misaki
+num2words
+phonemizer-fork
+spacy
+espeakng-loader
+loguru

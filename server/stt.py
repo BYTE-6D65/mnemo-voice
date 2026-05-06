@@ -37,9 +37,16 @@ class WhisperSTT:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as f:
             f.write(wav_bytes)
             f.flush()
-            segments, info = self.model.transcribe(f.name, beam_size=3)
+            segments, info = self.model.transcribe(
+                f.name,
+                beam_size=5,
+                language="en",
+                condition_on_previous_text=False,
+                vad_filter=True,
+                no_speech_threshold=0.6,
+            )
+            text = " ".join(segment.text.strip() for segment in segments)
 
-        text = " ".join(segment.text.strip() for segment in segments)
         return text
 
     def transcribe_pcm(self, pcm_data: bytes, sample_rate: int = 16000) -> str:

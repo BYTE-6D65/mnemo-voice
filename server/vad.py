@@ -1,8 +1,8 @@
 """
 Voice activity detection.
 
-Default path: simple energy-based VAD. It is dependency-light and perfectly fine
-for push-to-talk prototype work.
+Default path: simple energy-based VAD. It is dependency-light and intended for
+continuous mic streaming where the backend owns utterance boundaries.
 
 Optional path: set MNEMO_USE_SILERO=1 to try Silero VAD. If Silero or its
 transitive deps are missing, it falls back to EnergyVAD without killing the WS.
@@ -18,7 +18,7 @@ logger = logging.getLogger("mnemo-voice.vad")
 
 
 class EnergyVAD:
-    """Tiny RMS-energy VAD fallback. Good enough for prototype push-to-talk."""
+    """Tiny RMS-energy VAD fallback for continuous mic capture."""
 
     def __init__(
         self,
@@ -33,33 +33,34 @@ class EnergyVAD:
         self.silence_duration = silence_duration
         self.sample_rate = sample_rate
         self.chunk_ms = chunk_ms
-        self._silence_chunks = 0
-        self._silence_threshold_chunks = max(1, int(silence_duration * 1000 / chunk_ms))
+        # AudioWorklet emits tiny buffers, usually 128 frames. Counting chunks as
+        # fixed 256ms windows made silence fire after ~24ms instead of 800ms.
+        # Count actual samples so VAD timing matches real audio duration.
+        self._silence_samples = 0
+        self._silence_threshold_samples = max(1, int(silence_duration * sample_rate))
 
     @property
     def silence_exceeded(self) -> bool:
-        return self._silence_chunks >= self._silence_threshold_chunks
+        return self._silence_samples >= self._silence_threshold_samples
 
     def reset(self):
-        self._silence_chunks = 0
+        self._silence_samples = 0
 
     def process_chunk(self, pcm_bytes: bytes) -> bool:
         if not pcm_bytes:
-            self._silence_chunks += 1
             return False
 
         audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
         if audio.size == 0:
-            self._silence_chunks += 1
             return False
 
         rms = float(np.sqrt(np.mean(audio * audio)))
         is_speech = rms > self.threshold
 
         if is_speech:
-            self._silence_chunks = 0
+            self._silence_samples = 0
         else:
-            self._silence_chunks += 1
+            self._silence_samples += int(audio.size)
 
         return is_speech
 

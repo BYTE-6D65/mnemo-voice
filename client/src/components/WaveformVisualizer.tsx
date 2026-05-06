@@ -21,11 +21,13 @@ export default function WaveformVisualizer({ analyser, active, color }: Props) {
       animId = requestAnimationFrame(draw)
       const { width, height } = canvas
 
-      ctx.fillStyle = '#111118'
+      // Clear with slight fade for trail effect
+      ctx.fillStyle = 'rgba(9, 9, 11, 0.3)'
       ctx.fillRect(0, 0, width, height)
 
       if (!analyser || !active) {
-        ctx.strokeStyle = '#333'
+        // Idle: subtle center line
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)'
         ctx.lineWidth = 1
         ctx.beginPath()
         ctx.moveTo(0, height / 2)
@@ -38,12 +40,32 @@ export default function WaveformVisualizer({ analyser, active, color }: Props) {
       const data = new Uint8Array(bufLen)
       analyser.getByteTimeDomainData(data)
 
-      ctx.lineWidth = 2
+      // Glow layer
+      ctx.save()
+      ctx.shadowColor = color
+      ctx.shadowBlur = 12
+      ctx.lineWidth = 2.5
       ctx.strokeStyle = color
       ctx.beginPath()
 
       const sliceWidth = width / bufLen
       let x = 0
+      for (let i = 0; i < bufLen; i++) {
+        const v = data[i] / 128.0
+        const y = (v * height) / 2
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+        x += sliceWidth
+      }
+      ctx.lineTo(width, height / 2)
+      ctx.stroke()
+      ctx.restore()
+
+      // Brighter core line
+      ctx.lineWidth = 1.5
+      ctx.strokeStyle = `${color}cc`
+      ctx.beginPath()
+      x = 0
       for (let i = 0; i < bufLen; i++) {
         const v = data[i] / 128.0
         const y = (v * height) / 2
@@ -65,8 +87,15 @@ export default function WaveformVisualizer({ analyser, active, color }: Props) {
     if (!canvas) return
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        canvas.width = entry.contentRect.width
-        canvas.height = entry.contentRect.height
+        const { width, height } = entry.contentRect
+        // Use devicePixelRatio for crisp rendering
+        const dpr = window.devicePixelRatio || 1
+        canvas.width = width * dpr
+        canvas.height = height * dpr
+        canvas.style.width = `${width}px`
+        canvas.style.height = `${height}px`
+        const ctx = canvas.getContext('2d')
+        if (ctx) ctx.scale(dpr, dpr)
       }
     })
     observer.observe(canvas.parentElement!)

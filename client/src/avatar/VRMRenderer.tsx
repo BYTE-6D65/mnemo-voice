@@ -14,13 +14,15 @@ import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { VRMLoaderPlugin, VRM, VRMUtils } from '@pixiv/three-vrm'
-import type { AvatarFrame, VisemeName, ExpressionName } from './types'
+import type { AvatarFrame, AvatarOverride, VisemeName, ExpressionName } from './types'
 
 interface VRMRendererProps {
   /** URL or path to .vrm file */
   modelUrl: string
   /** Current avatar frame from useAvatarDriver */
   frame: AvatarFrame
+  /** Override from parsed avatar tags (head tilt, etc.) */
+  override?: AvatarOverride
   /** Called when model finishes loading */
   onLoaded?: (vrm: VRM) => void
   /** Called on load error */
@@ -53,7 +55,7 @@ const EXPRESSION_MAP: Record<ExpressionName, string> = {
 // Temporary vector for look-at target — avoids GC per frame
 const _lookAtTarget = new THREE.Object3D()
 
-export function VRMRenderer({ modelUrl, frame, onLoaded, onError }: VRMRendererProps) {
+export function VRMRenderer({ modelUrl, frame, override, onLoaded, onError }: VRMRendererProps) {
   const vrmRef = useRef<VRM | null>(null)
   const { scene } = useThree()
 
@@ -79,6 +81,20 @@ export function VRMRenderer({ modelUrl, frame, onLoaded, onError }: VRMRendererP
 
         // Rotate to face camera (VRM uses +Z forward, Three.js uses -Z)
         vrm.scene.rotation.y = Math.PI
+
+        console.log('[VRM] Loaded:', {
+          meshes: gltf.scene.children.length,
+          vrmHumanoid: !!vrm.humanoid,
+          vrmExpressions: !!vrm.expressionManager,
+        })
+
+        // Debug bounding box
+        const box = new THREE.Box3().setFromObject(vrm.scene)
+        const size = new THREE.Vector3()
+        const center = new THREE.Vector3()
+        box.getSize(size)
+        box.getCenter(center)
+        console.log('[VRM] Bounding box:', { min: box.min.toArray(), max: box.max.toArray(), size: size.toArray(), center: center.toArray() })
 
         scene.add(vrm.scene)
         vrmRef.current = vrm
@@ -138,6 +154,17 @@ export function VRMRenderer({ modelUrl, frame, onLoaded, onError }: VRMRendererP
         frame.lookAt.z * 2,
       )
       vrm.lookAt.target = _lookAtTarget
+    }
+
+    // Apply head tilt via head bone roll (after vrm.update so spring bones don't overwrite)
+    if (vrm.humanoid) {
+      const headBone = vrm.humanoid.getNormalizedBoneNode('head')
+      if (headBone) {
+        const tilt = override?.headTilt ?? 0
+        headBone.node.rotation.z = tilt
+        headBone.node.updateMatrix()
+        headBone.node.updateMatrixWorld(true)
+      }
     }
   })
 

@@ -2,13 +2,14 @@ import useVoiceClient from './hooks/useVoiceClient'
 import WaveformVisualizer from './components/WaveformVisualizer'
 import ChatLog from './components/ChatLog'
 import { AvatarScene, useAvatarDriver } from './avatar'
+import { useVrmHotReload } from './hooks/useVrmHotReload'
 import { useState, useEffect } from 'react'
 
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 
-// TODO: make this configurable — for now, null = placeholder cube
-const VRM_MODEL_URL: string | null = null
-// const VRM_MODEL_URL = '/models/avatar.vrm'
+// Default VRM model — drop a .vrm into client/public/ and update this path.
+// Hot-reloads when the file changes (see AvatarScene).
+const VRM_MODEL_URL: string | null = '/test-avatar.vrm'
 
 const STATE_CONFIG: Record<string, { label: string; color: string; glow: string; bg: string }> = {
   idle:        { label: 'Ready',            color: '#a78bfa', glow: 'rgba(167,139,250,0.2)',  bg: 'rgba(167,139,250,0.05)' },
@@ -37,6 +38,7 @@ export default function App() {
     isRecording,
     chatLog,
     analyser,
+    avatarOverride,
     startRecording,
     stopRecording,
     bargeIn,
@@ -44,7 +46,10 @@ export default function App() {
   } = useVoiceClient(WS_URL)
 
   // Drive the avatar from the voice pipeline
-  const { frame } = useAvatarDriver(agentState, analyser)
+  const { frame } = useAvatarDriver(agentState, analyser, undefined, avatarOverride ?? undefined)
+
+  // Hot-reload VRM — drop a new .vrm into public/ and it swaps live
+  const { modelUrl: vrmUrl } = useVrmHotReload(VRM_MODEL_URL)
 
   const [mounted, setMounted] = useState(false)
   useEffect(() => { setMounted(true) }, [])
@@ -135,7 +140,7 @@ export default function App() {
           border: '1px solid rgba(255,255,255,0.06)',
           position: 'relative',
         }}>
-          <AvatarScene modelUrl={VRM_MODEL_URL} frame={frame} />
+          <AvatarScene modelUrl={vrmUrl} frame={frame} override={avatarOverride ?? undefined} />
           {/* State indicator overlay */}
           <div style={{
             position: 'absolute', bottom: 8, right: 12,

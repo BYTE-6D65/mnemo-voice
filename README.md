@@ -1,68 +1,68 @@
-# Mnemo Voice
+# AI-tubing
 
-WebSocket voice channel adapter for Hermes agent.
+WebSocket voice channel for the Hermes agent. Standalone process — handles browser audio pipeline (VAD → STT → TTS), talks to Hermes gateway over HTTP.
+
+**Was:** mnemo-voice (renamed April 2026)
 
 ## Quick Start
 
 ```bash
 pip install -r requirements.txt
+
+# Echo mode (no gateway needed):
 python launch.py
+
+# With Hermes gateway:
+python -m server.main --gateway http://127.0.0.1:8766
 ```
 
-Then open `http://localhost:8765` in a browser. Push the mic button, talk, release.
-
-## Standalone Mode
-
-By default runs in echo mode — transcribes your voice and speaks it back. Good for testing the pipeline.
-
-## With Hermes Gateway
-
-Add to your Hermes config:
-
-```yaml
-platforms:
-  voice:
-    enabled: true
-    port: 8765
-```
+Open `http://localhost:8765` in a browser. Toggle the mic, talk.
 
 ## Architecture
 
-See [DESIGN.md](DESIGN.md).
+Two decoupled processes over HTTP:
+
+- **AI-tubing (port 8765):** WebSocket server, VAD, STT, TTS, React frontend. Runs standalone.
+- **Hermes gateway (port 8766 webhook):** Agent logic, tools, memory. Receives transcribed text, returns agent response.
+
+Either process can restart without affecting the other. See [DESIGN.md](DESIGN.md).
 
 ## Components
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| Voice Server | `server/main.py` | WebSocket server, audio pipeline orchestration |
-| VAD | `server/vad.py` | Silero VAD — detects speech boundaries |
-| STT | `server/stt.py` | Whisper — transcribes speech to text |
-| TTS | `server/tts.py` | Kokoros — synthesizes text to audio |
-| Audio Utils | `server/audio.py` | PCM/WAV conversion, resampling |
-| Hermes Adapter | `adapter/voice_adapter.py` | BasePlatformAdapter implementation |
-| Web Client | `client/index.html` + `client/app.js` | Browser mic + playback UI |
-| Launcher | `launch.py` | Standalone startup script |
+| Voice Server | `server/main.py` | Standalone aiohttp app — WebSocket, VAD, STT, TTS, static files |
+| VAD | `server/vad.py` | Silero VAD + EnergyVAD — speech boundary detection |
+| STT | `server/stt.py` | Whisper — speech to text |
+| TTS | `server/tts.py` | Kokoros — text to audio |
+| Audio Utils | `server/audio.py` | PCM/WAV conversion |
+| Hermes Adapter | `adapter/voice_adapter.py` | Thin webhook — receives text, returns agent response |
+| Web Client | `client/src/` | React 19 + Vite + TypeScript, VRM avatar (WIP) |
+| Launcher | `launch.py` | Standalone dev server (echo mode) |
 
-## Pipeline
+## Hermes Integration
 
+```yaml
+# In ~/.hermes/config.yaml:
+platforms:
+  voice:
+    enabled: true
+    extra:
+      webhook_host: "127.0.0.1"
+      webhook_port: 8766
+      voice_server_url: "http://127.0.0.1:8765"
 ```
-Browser mic → PCM chunks → WebSocket → Silero VAD
-                                       ↓ speech detected
-                               Buffer audio → Whisper STT → text
-                                       ↓
-                               Hermes agent (tools, memory, etc.)
-                                       ↓ response text
-                               Kokoros TTS → PCM chunks
-                                       ↓
-                               WebSocket → Browser playback
+
+## Frontend
+
+```bash
+cd client
+bun install
+bun run build   # output → client/dist/
 ```
 
-## Key Bindings
-
-- **Push to talk**: Hold mic button (mouse or touch)
-- **Barge in**: Start talking while agent is speaking to interrupt
-- **Text input**: Type in the text box as fallback
+Rebuilds are zero-downtime. No process restart needed.
 
 ## Status
 
-🚧 Pre-alpha. Pipeline works, needs real-world testing and Hermes integration.
+Voice pipeline works. Decoupled from gateway. VRM avatar WIP.

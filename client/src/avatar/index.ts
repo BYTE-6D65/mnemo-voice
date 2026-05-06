@@ -4,6 +4,7 @@ export { useAvatarDriver } from './useAvatarDriver'
 export type { AgentState } from './useAvatarDriver'
 export type {
   AvatarFrame,
+  AvatarOverride,
   AvatarRenderer,
   VisemeTrack,
   VisemeName,
