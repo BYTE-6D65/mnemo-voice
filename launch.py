@@ -76,7 +76,7 @@ class StandaloneVoiceServer:
         logger.info("Loading Whisper: %s", whisper_model)
         self.stt = WhisperSTT(model_name=whisper_model)
         logger.info("Loading Kokoros: %s", kokoros_voice)
-        self.tts = KokorosTTS(voice=kokoros_voice, sample_rate=sample_rate)
+        self.tts = KokorosTTS(voice=kokoros_voice, target_sample_rate=sample_rate)
         self.vad_cfg = {
             "threshold": vad_threshold,
             "silence_duration": 0.8,

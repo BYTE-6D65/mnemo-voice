@@ -1,10 +1,9 @@
 faster-whisper
 aiohttp
 numpy
-mlx-audio
+kokoro-onnx
 misaki
 num2words
 phonemizer-fork
-spacy
 espeakng-loader
 loguru
